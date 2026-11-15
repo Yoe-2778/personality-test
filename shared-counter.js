@@ -1,4 +1,5 @@
-export const COUNTER_API = 'https://closer-notes-counter.2263952184.workers.dev';
+export const COUNTER_API = 'https://closer-notes-counter.pages.dev';
+const PREVIOUS_COUNTER_API = 'https://closer-notes-counter.2263952184.workers.dev';
 export const PENDING_KEY = 'closer-notes:pending-generations:v1';
 export const COUNT_CACHE_KEY = 'closer-notes:shared-count-cache:v1';
 const validId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -18,7 +19,10 @@ export function createSharedCounter({ baseURL = COUNTER_API, storage, fetchImpl 
   function readCachedTotal() {
     try {
       const saved = JSON.parse(storage?.getItem(COUNT_CACHE_KEY) || 'null');
-      return saved?.api === base && Number.isSafeInteger(saved.total) && saved.total >= 0 ? saved.total : null;
+      // Both production addresses use the same D1 database. Keep its confirmed
+      // count visible during the move; unrelated services must not share caches.
+      const sameCounter = saved?.api === base || (base === COUNTER_API && saved?.api === PREVIOUS_COUNTER_API);
+      return sameCounter && Number.isSafeInteger(saved.total) && saved.total >= 0 ? saved.total : null;
     } catch { return null; }
   }
   function cacheTotal() {
