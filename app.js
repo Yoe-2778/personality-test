@@ -1,10 +1,10 @@
 import { dimensions, questions, archetypes, guidance, calculateResult } from './data.js';
+import { createSharedCounter } from './shared-counter.js';
 
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const storageKey = 'love-notes:v1';
 const testCountKey = 'closer-notes:test-count:v1';
-let testCount = 0;
 let state = { answers: Array(24).fill(null), index: 0, screen: 'home' };
 let result;
 let saveFailed = false;
@@ -13,18 +13,26 @@ let resultTransitionTimer;
 let deliveryReadyAt = 0;
 let galleryFilter = 'all';
 
-function readTestCount() {
-  try {
-    const count = Number(localStorage.getItem(testCountKey));
-    return Number.isSafeInteger(count) && count >= 0 ? count : 0;
-  } catch { return testCount; }
+const sharedCounter = createSharedCounter({ onChange: updateCounter });
+function counterMarkup() {
+  const { total, status, pending } = sharedCounter.snapshot();
+  if (total === null) return `已测试小咪：<strong>${status === 'error' ? '暂时无法加载' : '加载中…'}</strong>${pending ? '（本次生成等待同步）' : ''}`;
+  const hint = status === 'error' ? (pending ? '本次生成等待同步' : '更新暂不可用') : pending ? '同步中…' : '';
+  return `已测试小咪：<strong>${total.toLocaleString('zh-CN')}</strong> 只${hint ? ` <small>（${hint}）</small>` : ''}`;
 }
-testCount = readTestCount();
-function recordGeneratedResult() {
-  testCount = readTestCount() + 1;
-  try { localStorage.setItem(testCountKey, String(testCount)); }
-  catch { /* Keep the counter available in memory if storage is disabled. */ }
+function updateCounter() {
+  const element = app.querySelector('.test-count');
+  if (element) element.innerHTML = counterMarkup();
 }
+const showingCounter = () => ['result', 'sample'].includes(state.screen);
+window.addEventListener('online', () => { void sharedCounter.refresh(); });
+window.addEventListener('storage', () => { if (showingCounter()) void sharedCounter.refresh(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && showingCounter()) void sharedCounter.refresh();
+});
+setInterval(() => { if (!document.hidden && showingCounter()) void sharedCounter.sync(); }, 30000);
+// Resume unsent generations after a reload, even when the visitor opens the home page.
+if (sharedCounter.snapshot().pending) void sharedCounter.sync();
 
 function cancelResultTransition() {
   clearTimeout(resultTransitionTimer);
@@ -250,13 +258,13 @@ function showResult(sample = false, generated = false, galleryType = null) {
   const fromGallery = sample && Number.isInteger(galleryType) && galleryType >= 0 && galleryType < 16;
   result = fromGallery ? archetypeResult(galleryType) : sample ? calculateResult(questions.map(q => q.direction === 1 ? [3, 0, 3, 0][q.dimension] : [0, 3, 0, 3][q.dimension])) : calculateResult(state.answers);
   history.replaceState(null, '', location.pathname + location.search + (fromGallery ? `#cat-${galleryType + 1}` : ''));
-  if (!sample && generated) { recordGeneratedResult(); state.needsGeneration = false; }
-  else testCount = readTestCount();
+  if (!sample && generated) { sharedCounter.record(); state.needsGeneration = false; }
   state.screen = sample ? 'sample' : 'result';
   if (!sample) persist();
   const r = result;
   const notes = dimensions.map((_, i) => selectedGuidance(r, i));
-  app.innerHTML = `${header()}<main class="result-main">${sample ? '<div class="sample-banner">这是一份示例说明书。完成测试后，会生成属于你的内容。<button data-action="start">开始我的测试 →</button></div>' : ''}<div class="result-intro"><span class="section-kicker">A LITTLE GUIDE TO KNOWING ME</span><p>${sample ? '示例' : '你的专属'}亲密关系使用说明书</p><div class="result-emblem">${galleryArt(r.type, 'result-cats')}</div><h1>${r.name}</h1><p class="result-subtitle">${r.subtitle}</p><span class="result-number">RELATIONSHIP PORTRAIT · ${String(r.type + 1).padStart(2, '0')} / 16</span><button class="text-button result-gallery-link" data-action="gallery-return">${icon('back')} ${fromGallery ? '返回小猫图鉴' : '认识全部16只小猫'}</button></div>${relationshipOverview(r)}<section class="result-guides"><div class="result-section-title"><span>02</span><h2>关于我的四件小事</h2></div><div class="guide-grid">${notes.map((n, i) => `<article class="guide-card dimension-${i}">${catArt(guideScene(r, i), 'guide-cat', true)}<span class="guide-label">${dimensions[i].name}</span><h3>${n.title}</h3><p>${n.body}</p><blockquote>“${n.request}”</blockquote></article>`).join('')}</div></section><section class="result-reflections"><div class="reflection-column"><span class="section-kicker">A LITTLE UNDERSTANDING</span><h2>那些容易发生的误会</h2>${catArt(11, 'reflection-cats', true)}${notes.slice(0, 3).map(n => `<p>${icon('chat')}<span>${n.misunderstanding}</span></p>`).join('')}</div><div class="reflection-column practice-column"><span class="section-kicker">A LITTLE PRACTICE</span><h2>我也可以练习的事</h2>${notes.map(n => `<p>${icon('spark')}<span>${n.practice}</span></p>`).join('')}</div></section><section class="share-section"><div><span class="section-kicker">A NOTE WORTH SHARING</span><h2>把这一页，送给想懂你的人</h2><p>分享卡片只包含关系画像和相处提示。<br>你可以先编辑文字，再决定分享给谁。</p><div class="share-actions"><button class="button primary" data-action="share">${icon('download')} 制作我的分享卡片</button><button class="button secondary" data-action="copy">${icon('copy')} 复制相处提示</button></div><p class="test-count" aria-live="polite">已测试小咪：<strong>${testCount.toLocaleString('zh-CN')}</strong> 只</p></div><div class="mini-share"><span>CLOSER NOTES / 我的相处说明书</span>${galleryArt(r.type, 'mini-share-cats')}<h3>${r.name}</h3><p>${r.subtitle}</p><div class="mini-tags">${dimensions.map((d, i) => `<span>${r.balanced[i] ? '灵活平衡' : r.sides[i] ? d.right : d.left}</span>`).join('')}</div><span class="mini-bottom">每一份在乎，都值得被读懂 ♡</span></div></section><div class="result-ending">${catArt(7, 'ending-cats')}<p>人会成长，关系也会变化。<br>把这份说明书当作一次对话的开始，让彼此继续认识彼此。</p><div><button class="text-button" data-action="edit">${sample ? '开始我的测试' : '修改我的答案'} ${icon('arrow')}</button>${!sample ? '<button class="text-button muted" data-action="restart">重新测试</button>' : ''}</div><p class="disclaimer">本测试为原创自我探索工具，未经心理测量学验证，不用于心理诊断或关系匹配预测。</p></div>${authorNote()}${supportNote()}</main>${footer()}`;
+  app.innerHTML = `${header()}<main class="result-main">${sample ? '<div class="sample-banner">这是一份示例说明书。完成测试后，会生成属于你的内容。<button data-action="start">开始我的测试 →</button></div>' : ''}<div class="result-intro"><span class="section-kicker">A LITTLE GUIDE TO KNOWING ME</span><p>${sample ? '示例' : '你的专属'}亲密关系使用说明书</p><div class="result-emblem">${galleryArt(r.type, 'result-cats')}</div><h1>${r.name}</h1><p class="result-subtitle">${r.subtitle}</p><span class="result-number">RELATIONSHIP PORTRAIT · ${String(r.type + 1).padStart(2, '0')} / 16</span><button class="text-button result-gallery-link" data-action="gallery-return">${icon('back')} ${fromGallery ? '返回小猫图鉴' : '认识全部16只小猫'}</button></div>${relationshipOverview(r)}<section class="result-guides"><div class="result-section-title"><span>02</span><h2>关于我的四件小事</h2></div><div class="guide-grid">${notes.map((n, i) => `<article class="guide-card dimension-${i}">${catArt(guideScene(r, i), 'guide-cat', true)}<span class="guide-label">${dimensions[i].name}</span><h3>${n.title}</h3><p>${n.body}</p><blockquote>“${n.request}”</blockquote></article>`).join('')}</div></section><section class="result-reflections"><div class="reflection-column"><span class="section-kicker">A LITTLE UNDERSTANDING</span><h2>那些容易发生的误会</h2>${catArt(11, 'reflection-cats', true)}${notes.slice(0, 3).map(n => `<p>${icon('chat')}<span>${n.misunderstanding}</span></p>`).join('')}</div><div class="reflection-column practice-column"><span class="section-kicker">A LITTLE PRACTICE</span><h2>我也可以练习的事</h2>${notes.map(n => `<p>${icon('spark')}<span>${n.practice}</span></p>`).join('')}</div></section><section class="share-section"><div><span class="section-kicker">A NOTE WORTH SHARING</span><h2>把这一页，送给想懂你的人</h2><p>分享卡片只包含关系画像和相处提示。<br>你可以先编辑文字，再决定分享给谁。</p><div class="share-actions"><button class="button primary" data-action="share">${icon('download')} 制作我的分享卡片</button><button class="button secondary" data-action="copy">${icon('copy')} 复制相处提示</button></div><p class="test-count" aria-live="polite">${counterMarkup()}</p></div><div class="mini-share"><span>CLOSER NOTES / 我的相处说明书</span>${galleryArt(r.type, 'mini-share-cats')}<h3>${r.name}</h3><p>${r.subtitle}</p><div class="mini-tags">${dimensions.map((d, i) => `<span>${r.balanced[i] ? '灵活平衡' : r.sides[i] ? d.right : d.left}</span>`).join('')}</div><span class="mini-bottom">每一份在乎，都值得被读懂 ♡</span></div></section><div class="result-ending">${catArt(7, 'ending-cats')}<p>人会成长，关系也会变化。<br>把这份说明书当作一次对话的开始，让彼此继续认识彼此。</p><div><button class="text-button" data-action="edit">${sample ? '开始我的测试' : '修改我的答案'} ${icon('arrow')}</button>${!sample ? '<button class="text-button muted" data-action="restart">重新测试</button>' : ''}</div><p class="disclaimer">本测试为原创自我探索工具，未经心理测量学验证，不用于心理诊断或关系匹配预测。</p></div>${authorNote()}${supportNote()}</main>${footer()}`;
+  void sharedCounter.refresh();
   if (fromGallery) document.querySelector('.sample-banner').innerHTML = `你正在阅读「${r.name}」的图鉴示例。你的专属偏好以实际答题为准。<button data-action="gallery-return">返回小猫图鉴</button>`;
   window.scrollTo({ top: 0 });
 }
@@ -393,10 +401,10 @@ document.addEventListener('click', event => {
     }
     case 'close': modal.close(); break;
     case 'about': openModal('一封让彼此更懂的来信', '<div class="modal-copy"><p>亲密来信通过 24 道生活情境题，探索靠近节奏、关心表达、分歧处理和相处安排四个维度。每个维度包含 6 道题，结合回答生成 16 种关系画像之一。</p><p>亲密也包括好朋友之间的信任与陪伴。答题时，可以想着一位对你重要的人，尽量以同一段关系为参照，按平时的真实感受回答；也可以根据让自己舒服的相处方式作答。</p><p>本测试为原创自我探索工具，未经心理测量学验证。结果描述本次回答中的偏好，不用于心理诊断、人格定论或关系匹配预测。</p><p>你可以用结果开启一次谈话：“这里有点像我，你呢？”</p></div>'); break;
-    case 'privacy': openModal('这份来信，先留给自己', '<div class="modal-copy"><p>答题进度仅保存在当前浏览器的本地存储中。本应用不会将答案或结果上传，也没有账号和追踪统计。生成次数仅在本浏览器累计保存，清除本地测试数据时会一并重置。</p><p>在共用设备上使用时，其他使用该浏览器的人可能看到保留的进度。你可以点击下方按钮清除。</p><p>分享卡片由当前浏览器生成并下载，由你决定是否发送。卡片不包含逐题答案。</p><button class="button secondary" data-action="clear">清除本地测试数据</button></div>'); break;
+    case 'privacy': openModal('这份来信，先留给自己', '<div class="modal-copy"><p>答题进度仅保存在当前浏览器。本应用不会上传答案、称呼或报告内容。所有访问者共享生成总次数；每次生成只向 Cloudflare 计数接口发送随机请求编号，用于防止重试重复计数。Cloudflare 会处理请求的常规网络信息。</p><p>暂未同步的计数请求编号会保存在当前浏览器，联网后重试。清除本地测试数据会清除答题进度和待同步记录，不会重置公共总数。</p><p>在共用设备上使用时，其他使用该浏览器的人可能看到保留的进度。你可以点击下方按钮清除。</p><p>分享卡片由当前浏览器生成并下载，由你决定是否发送。卡片不包含逐题答案。</p><button class="button secondary" data-action="clear">清除本地测试数据</button></div>'); break;
     case 'clear':
       try { localStorage.removeItem(storageKey); localStorage.removeItem(testCountKey); } catch { /* Cleared in memory below. */ }
-      testCount = 0;
+      sharedCounter.clearLocal();
       state = { answers: Array(24).fill(null), index: 0, screen: 'home' }; result = undefined; modal.close(); home(); toast('本地测试数据已清除。'); break;
     case 'restart': openModal('重新认识此刻的自己', '<p class="modal-lead">重新开始会清除这次的答题进度。你可以先保存已经生成的卡片。</p><div class="modal-actions"><button class="button secondary" data-action="close">保留这次进度</button><button class="button primary" data-action="confirm-restart">重新开始</button></div>'); break;
     case 'confirm-restart': state.answers = Array(24).fill(null); state.index = 0; state.needsGeneration = false; modal.close(); start(); break;
