@@ -15,10 +15,9 @@ let galleryFilter = 'all';
 
 const sharedCounter = createSharedCounter({ onChange: updateCounter });
 function counterMarkup() {
-  const { total, status, pending } = sharedCounter.snapshot();
-  if (total === null) return `已测试小咪：<strong>${status === 'error' ? '暂时无法加载' : '加载中…'}</strong>${pending ? '（本次生成等待同步）' : ''}`;
-  const hint = status === 'error' ? (pending ? '本次生成等待同步' : '更新暂不可用') : pending ? '同步中…' : '';
-  return `已测试小咪：<strong>${total.toLocaleString('zh-CN')}</strong> 只${hint ? ` <small>（${hint}）</small>` : ''}`;
+  const { total } = sharedCounter.snapshot();
+  if (total === null) return '已测试小咪：<strong>同步中…</strong>';
+  return `已测试小咪：<strong>${total.toLocaleString('zh-CN')}</strong> 只`;
 }
 function updateCounter() {
   const element = app.querySelector('.test-count');
@@ -26,13 +25,16 @@ function updateCounter() {
 }
 const showingCounter = () => ['result', 'sample'].includes(state.screen);
 window.addEventListener('online', () => { void sharedCounter.refresh(); });
-window.addEventListener('storage', () => { if (showingCounter()) void sharedCounter.refresh(); });
+window.addEventListener('storage', event => {
+  // Ignore cache writes from another tab to avoid tabs triggering each other's GET requests.
+  if (event.key === 'closer-notes:pending-generations:v1' && showingCounter()) void sharedCounter.refresh();
+});
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && showingCounter()) void sharedCounter.refresh();
 });
 setInterval(() => { if (!document.hidden && showingCounter()) void sharedCounter.sync(); }, 30000);
-// Resume unsent generations after a reload, even when the visitor opens the home page.
-if (sharedCounter.snapshot().pending) void sharedCounter.sync();
+// Fetch quietly while the visitor answers; cached totals are immediately available after reload.
+void sharedCounter.sync();
 
 function cancelResultTransition() {
   clearTimeout(resultTransitionTimer);

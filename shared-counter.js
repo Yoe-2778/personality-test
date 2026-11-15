@@ -1,5 +1,6 @@
 export const COUNTER_API = 'https://closer-notes-counter.2263952184.workers.dev';
 export const PENDING_KEY = 'closer-notes:pending-generations:v1';
+export const COUNT_CACHE_KEY = 'closer-notes:shared-count-cache:v1';
 const validId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 
 // Only random generation IDs leave the browser. Answers and reports stay local.
@@ -8,12 +9,24 @@ export function createSharedCounter({ baseURL = COUNTER_API, storage, fetchImpl 
   if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
   const base = baseURL.replace(/\/$/, '');
   let pending = new Set(readPending());
-  let total = null;
+  let total = readCachedTotal();
   let status = 'loading';
   let inFlight;
   let retryTimer;
   let retries = 0;
   let disposed = false;
+  function readCachedTotal() {
+    try {
+      const saved = JSON.parse(storage?.getItem(COUNT_CACHE_KEY) || 'null');
+      return saved?.api === base && Number.isSafeInteger(saved.total) && saved.total >= 0 ? saved.total : null;
+    } catch { return null; }
+  }
+  function cacheTotal() {
+    // Preserve the newest server-confirmed value, including across browser tabs.
+    total = Math.max(total, readCachedTotal() ?? 0);
+    try { storage?.setItem(COUNT_CACHE_KEY, JSON.stringify({ api: base, total })); }
+    catch { /* The last confirmed total remains available in memory. */ }
+  }
   function readPending() {
     try {
       const saved = JSON.parse(storage?.getItem(PENDING_KEY) || '[]');
@@ -43,6 +56,7 @@ export function createSharedCounter({ baseURL = COUNTER_API, storage, fetchImpl 
       const data = await response.json();
       if (!Number.isSafeInteger(data.total) || data.total < 0) throw new Error('Invalid counter response');
       total = Math.max(total ?? 0, data.total);
+      cacheTotal();
       status = 'ready';
       return data.total;
     } finally { clearTimeout(timer); }
@@ -69,7 +83,7 @@ export function createSharedCounter({ baseURL = COUNTER_API, storage, fetchImpl 
         retries = 0;
       } catch {
         status = 'error';
-        if (pending.size) scheduleRetry();
+        scheduleRetry();
       } finally { inFlight = undefined; emit(); }
       return snapshot();
     })();
